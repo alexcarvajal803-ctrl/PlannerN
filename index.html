@@ -1,0 +1,1893 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PlannerN</title>
+    
+    <!-- Tailwind CSS para el diseño -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome para los íconos -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- React y ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    
+    <!-- Babel para compilar JSX en el navegador -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- ExcelJS y FileSaver para exportar a .xlsx nativo con estilos y colores -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <!-- CARGAR LA BASE DE DATOS LOCAL AUTOMÁTICAMENTE (Restaurado al orden original prioritario) -->
+    <script src="./baseDeDatos.js"></script>
+
+    <!-- Firebase Compat (Cargado tradicionalmente para evitar CORS y problemas de módulos) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <!-- Script principal de la aplicación -->
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Configuración de Firebase ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "TU_API_KEY",
+            authDomain: "TU_PROYECTO.firebaseapp.com",
+            projectId: "TU_PROYECTO",
+            storageBucket: "TU_PROYECTO.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef"
+        };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'mi-app-nutricion';
+
+        let app, auth, db;
+        try {
+            app = firebase.initializeApp(firebaseConfig);
+            auth = firebase.auth();
+            db = firebase.firestore();
+        } catch(e) {
+            console.warn("Firebase no se pudo iniciar.");
+        }
+
+        // --- Componentes de Íconos (Mapeados a FontAwesome) ---
+        const PieChart = ({className}) => <i className={`fas fa-chart-pie ${className || ''}`}></i>;
+        const PlusCircle = ({className}) => <i className={`fas fa-plus-circle ${className || ''}`}></i>;
+        const BookOpen = ({className}) => <i className={`fas fa-book-open ${className || ''}`}></i>;
+        const Save = ({className}) => <i className={`fas fa-save ${className || ''}`}></i>;
+        const Edit2 = ({className}) => <i className={`fas fa-pen ${className || ''}`}></i>;
+        const Trash2 = ({className}) => <i className={`fas fa-trash-alt ${className || ''}`}></i>;
+        const ChevronDown = ({className}) => <i className={`fas fa-chevron-down ${className || ''}`}></i>;
+        const ChevronUp = ({className}) => <i className={`fas fa-chevron-up ${className || ''}`}></i>;
+        const Search = ({className}) => <i className={`fas fa-search ${className || ''}`}></i>;
+        const Utensils = ({className}) => <i className={`fas fa-utensils ${className || ''}`}></i>;
+        const Home = ({className}) => <i className={`fas fa-home ${className || ''}`}></i>;
+        const Plus = ({className}) => <i className={`fas fa-plus ${className || ''}`}></i>;
+        const ArrowLeft = ({className}) => <i className={`fas fa-arrow-left ${className || ''}`}></i>;
+        const X = ({className}) => <i className={`fas fa-times ${className || ''}`}></i>;
+        const Info = ({className}) => <i className={`fas fa-info-circle ${className || ''}`}></i>;
+        const Apple = ({className}) => <i className={`fas fa-apple-alt ${className || ''}`}></i>;
+        const Activity = ({className}) => <i className={`fas fa-spinner fa-spin ${className || ''}`}></i>;
+        const UploadIcon = ({className}) => <i className={`fas fa-file-import ${className || ''}`}></i>;
+        const ClipboardList = ({className}) => <i className={`fas fa-clipboard-list ${className || ''}`}></i>;
+        const TableIcon = ({className}) => <i className={`fas fa-table ${className || ''}`}></i>;
+        const FileExcel = ({className}) => <i className={`fas fa-file-excel ${className || ''}`}></i>;
+        const Bookmark = ({className}) => <i className={`fas fa-bookmark ${className || ''}`}></i>;
+
+        // --- Grupos de Alimentos Oficiales ---
+        const FOOD_GROUPS = [
+            "Leches y Derivados", "Huevos", "Carnes y Vísceras", "Pescados y Mariscos",
+            "Leguminosas y Oleaginosas", "Semillas, Almendras y Nueces", "Cereales y Derivados",
+            "Papas", "Grasas y Aceites", "Verduras", "Frutas", "Azúcares y miel",
+            "Alimentos Dulces", "Postres de leche", "Jugos y Néctares", "Refrescos en polvo",
+            "Bebidas", "Bebidas Alcohólicas", "Productos Salados", "Salsas", "Salados",
+            "Especias", "Endulzantes", "Platos Preparados", "Alimentos con formulación Especial"
+        ];
+
+        // --- Limpiador de Categorías (Limpia "2.1", etc. de forma segura) ---
+        const cleanGroupString = (str) => {
+            if(!str) return "Otros (Sin clasificar)";
+            return str.toString().replace(/^[0-9.\-\s]+/, '').trim();
+        };
+
+        // --- Campos de Micronutrientes Solicitados ---
+        const MICRO_FIELDS = [
+            { key: 'humidity', label: 'Humedad', unit: 'g' },
+            { key: 'ash', label: 'Ceniza', unit: 'g' },
+            { key: 'sugars', label: 'Azúcares totales', unit: 'g' },
+            { key: 'fiber', label: 'Fibras totales', unit: 'g' },
+            { key: 'lipidTotal', label: 'Lípidos totales', unit: 'g' },
+            { key: 'saturatedFat', label: 'AG Sat', unit: 'g' },
+            { key: 'monoFat', label: 'AG Mono', unit: 'g' },
+            { key: 'polyFat', label: 'AG Poli', unit: 'g' },
+            { key: 'transFat', label: 'AG trans', unit: 'g' },
+            { key: 'cholesterol', label: 'Colesterol', unit: 'mg' },
+            { key: 'vitA', label: 'Vit A', unit: 'ug' },
+            { key: 'vitC', label: 'Vit C', unit: 'mg' },
+            { key: 'vitD', label: 'Vit D', unit: 'ug' },
+            { key: 'vitE', label: 'Vit E', unit: 'mg' },
+            { key: 'vitK', label: 'Vit K', unit: 'ug' },
+            { key: 'vitB1', label: 'Vit B1', unit: 'mg' },
+            { key: 'vitB2', label: 'Vit B2', unit: 'mg' },
+            { key: 'niacin', label: 'Niacina', unit: 'mg' },
+            { key: 'vitB6', label: 'Vit B6', unit: 'mg' },
+            { key: 'pantothenicAcid', label: 'Ac. Pantoténico', unit: 'mg' },
+            { key: 'vitB12', label: 'Vit B12', unit: 'ug' },
+            { key: 'folate', label: 'Folatos', unit: 'ug' },
+            { key: 'sodium', label: 'Sodio', unit: 'mg' },
+            { key: 'potassium', label: 'Potasio', unit: 'mg' },
+            { key: 'calcium', label: 'Calcio', unit: 'mg' },
+            { key: 'phosphorus', label: 'Fósforo', unit: 'mg' },
+            { key: 'magnesium', label: 'Magnesio', unit: 'mg' },
+            { key: 'iron', label: 'Hierro', unit: 'mg' },
+            { key: 'zinc', label: 'Zinc', unit: 'mg' },
+            { key: 'copper', label: 'Cobre', unit: 'mg' },
+            { key: 'selenium', label: 'Selenio', unit: 'ug' },
+            { key: 'alcohol', label: 'Alcohol', unit: 'g' }
+        ];
+
+        const INITIAL_FOOD_STATE = {
+            id: null, name: '', group: FOOD_GROUPS[0], kcal: '', protein: '', carbs: '', fats: '',
+            isTCA: false,
+            micros: Object.fromEntries(MICRO_FIELDS.map(f => [f.key, ''])),
+            sourceLink: ''
+        };
+
+        // --- Componente Modal UI Customizado ---
+        const CustomModalUI = ({ isOpen, title, message, onConfirm, type, onClose }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 overflow-hidden transform transition-all">
+                        <h3 className="text-lg font-bold text-gray-900 mb-2 whitespace-pre-line">{title}</h3>
+                        <p className="text-sm text-gray-600 mb-6 whitespace-pre-line">{message}</p>
+                        <div className="flex gap-3 justify-end">
+                            {type === 'confirm' && (
+                                <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors">
+                                    Cancelar
+                                </button>
+                            )}
+                            <button 
+                                onClick={() => { if(onConfirm) onConfirm(); onClose(); }} 
+                                className={`px-4 py-2 text-sm font-bold text-white rounded-xl shadow-md transition-colors ${type === 'confirm' ? 'bg-red-500 hover:bg-red-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                            >
+                                {type === 'confirm' ? 'Eliminar' : 'Entendido'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Componente Guardar Planificación Modal ---
+        const SavePlanModal = ({ isOpen, onClose, onSave }) => {
+            const [planName, setPlanName] = useState('');
+
+            if (!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 overflow-hidden transform transition-all">
+                        <h3 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2"><Save className="text-indigo-600"/> Guardar Planificación</h3>
+                        <p className="text-sm text-gray-600 mb-4">Ingresa un nombre para guardar esta configuración y poder cargarla más adelante.</p>
+                        
+                        <input 
+                            type="text" 
+                            placeholder="Ej. Lunes - Definición"
+                            value={planName}
+                            onChange={(e) => setPlanName(e.target.value)}
+                            className="w-full p-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none mb-6 bg-gray-50"
+                        />
+
+                        <div className="flex gap-3 justify-end">
+                            <button onClick={() => { onClose(); setPlanName(''); }} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors">
+                                Cancelar
+                            </button>
+                            <button 
+                                onClick={() => { 
+                                    if(planName.trim()) { 
+                                        onSave(planName.trim()); 
+                                        setPlanName(''); 
+                                        onClose(); 
+                                    } 
+                                }} 
+                                disabled={!planName.trim()}
+                                className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 rounded-xl shadow-md hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                            >
+                                Guardar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Componente Exportar Modal ---
+        const ExportModal = ({ isOpen, onClose, onExportSheets, onExportExcel }) => {
+            const [selectedMicros, setSelectedMicros] = useState([]);
+            const [exportType, setExportType] = useState('sheets');
+
+            if (!isOpen) return null;
+
+            const toggleMicro = (key) => {
+                if (selectedMicros.includes(key)) {
+                    setSelectedMicros(selectedMicros.filter(k => k !== key));
+                } else {
+                    setSelectedMicros([...selectedMicros, key]);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 overflow-hidden flex flex-col max-h-[90vh]">
+                        <h3 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2"><TableIcon className="text-indigo-600"/> Exportar Minuta</h3>
+                        <p className="text-sm text-gray-600 mb-4">Selecciona los micronutrientes a incluir en la tabla.</p>
+                        
+                        <div className="flex gap-2 mb-3">
+                            <button onClick={() => setSelectedMicros(MICRO_FIELDS.map(f => f.key))} className="text-xs bg-gray-100 px-3 py-1 rounded hover:bg-gray-200 font-medium">Seleccionar Todos</button>
+                            <button onClick={() => setSelectedMicros([])} className="text-xs bg-gray-100 px-3 py-1 rounded hover:bg-gray-200 font-medium">Limpiar</button>
+                        </div>
+
+                        <div className="overflow-y-auto flex-1 border border-gray-200 rounded-xl p-3 mb-4 grid grid-cols-2 gap-2 bg-gray-50 max-h-[30vh]">
+                            {MICRO_FIELDS.map(f => (
+                                <label key={f.key} className="flex items-center gap-2 text-sm cursor-pointer p-1 hover:bg-gray-100 rounded">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={selectedMicros.includes(f.key)} 
+                                        onChange={() => toggleMicro(f.key)}
+                                        className="rounded text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                    <span className="truncate">{f.label} ({f.unit})</span>
+                                </label>
+                            ))}
+                        </div>
+
+                        <div className="mb-6">
+                            <label className="block text-sm font-bold text-gray-700 mb-2">Formato de Salida</label>
+                            <div className="flex bg-gray-100 p-1 rounded-lg">
+                                <button 
+                                    onClick={() => setExportType('sheets')}
+                                    className={`flex-1 py-2 text-sm font-bold rounded-md transition-colors flex items-center justify-center gap-2 ${exportType === 'sheets' ? 'bg-white shadow text-green-600' : 'text-gray-500 hover:bg-gray-200'}`}
+                                >
+                                    <TableIcon /> Pegar a Sheets
+                                </button>
+                                <button 
+                                    onClick={() => setExportType('excel')}
+                                    className={`flex-1 py-2 text-sm font-bold rounded-md transition-colors flex items-center justify-center gap-2 ${exportType === 'excel' ? 'bg-white shadow text-emerald-600' : 'text-gray-500 hover:bg-gray-200'}`}
+                                >
+                                    <FileExcel /> Excel (.xlsx)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 justify-end mt-auto">
+                            <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors">
+                                Cancelar
+                            </button>
+                            <button 
+                                onClick={() => { 
+                                    if (exportType === 'excel') onExportExcel(selectedMicros); 
+                                    else onExportSheets(selectedMicros); 
+                                    onClose(); 
+                                }} 
+                                className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 rounded-xl shadow-md hover:bg-indigo-700 transition-colors flex items-center gap-2"
+                            >
+                                {exportType === 'excel' ? <><FileExcel/> Descargar</> : <><TableIcon/> Copiar Tabla</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Componente CollapsibleGroup ---
+        const CollapsibleGroup = ({ title, count, children, defaultOpen = false, headerClass = "bg-gray-800 text-white" }) => {
+            const [isOpen, setIsOpen] = useState(defaultOpen);
+            return (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden transition-all">
+                    <button type="button" onClick={() => setIsOpen(!isOpen)} className={`w-full px-4 py-3 font-bold text-sm uppercase tracking-wide flex justify-between items-center focus:outline-none transition-colors ${headerClass}`}>
+                        <div className="flex items-center gap-2">
+                            {isOpen ? <ChevronUp className="text-sm" /> : <ChevronDown className="text-sm" />}
+                            <span>{title}</span>
+                        </div>
+                        {count !== undefined && <span className="bg-black/20 px-2 py-0.5 rounded text-xs">{count}</span>}
+                    </button>
+                    {isOpen && <div className="divide-y divide-gray-50">{children}</div>}
+                </div>
+            );
+        };
+
+        // --- Componentes Principales ---
+        const WelcomeScreen = ({ onStart }) => (
+            <div className="min-h-screen bg-indigo-600 flex flex-col items-center justify-center p-6 text-white text-center">
+                <div className="bg-white/20 p-8 rounded-full mb-6 backdrop-blur-sm flex items-center justify-center shadow-xl">
+                    <Apple className="text-6xl text-green-300" />
+                </div>
+                <h1 className="text-4xl font-bold mb-2">PlannerN</h1>
+                <p className="text-indigo-100 mb-8 max-w-xs">
+                    Calcula tus requerimientos y planifica tu alimentación con nuestra base de datos completa.
+                </p>
+                <button 
+                    onClick={onStart}
+                    className="bg-white text-indigo-600 px-8 py-3 rounded-full font-bold text-lg shadow-lg hover:bg-gray-100 transition-transform active:scale-95 flex items-center gap-2"
+                >
+                    Inicio <Home className="text-xl" />
+                </button>
+            </div>
+        );
+
+        const FoodSelector = ({ foodList, onSelect, onCancel }) => {
+            const [searchTerm, setSearchTerm] = useState('');
+            const [selectedFood, setSelectedFood] = useState(null);
+            const [grams, setGrams] = useState('');
+            const [measure, setMeasure] = useState('');
+
+            const normalizeStr = (str) => {
+                if(!str) return "";
+                return str.toString().trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            };
+
+            const searchWords = normalizeStr(searchTerm).split(' ').filter(w => w.length > 0);
+
+            const filteredFoods = foodList.filter(f => {
+                if (searchWords.length === 0) return true;
+                const normalizedName = normalizeStr(f.name);
+                return searchWords.every(word => normalizedName.includes(word));
+            });
+
+            const groupedFoods = searchTerm.length === 0 ? filteredFoods.reduce((acc, food) => {
+                let groupName = cleanGroupString(food.group);
+                const matched = FOOD_GROUPS.find(g => normalizeStr(g) === normalizeStr(groupName));
+                groupName = matched || "Otros (Sin clasificar)";
+
+                if (!acc[groupName]) acc[groupName] = [];
+                acc[groupName].push(food);
+                return acc;
+            }, {}) : {};
+
+            const orderedGroups = [...FOOD_GROUPS, "Otros (Sin clasificar)"].filter(g => groupedFoods[g]);
+
+            const handleAdd = () => {
+                if (!selectedFood || !grams) return;
+                onSelect(selectedFood, parseFloat(grams), measure);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-gray-50 z-50 overflow-y-auto flex flex-col">
+                    <div className="bg-white p-4 border-b border-gray-200 sticky top-0 z-10 flex items-center gap-3 shadow-sm">
+                        <button onClick={onCancel} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
+                            <ArrowLeft className="text-xl" />
+                        </button>
+                        <h2 className="text-lg font-bold text-gray-800">Seleccionar Alimento</h2>
+                    </div>
+
+                    <div className="p-4 flex-1 pb-32 flex flex-col gap-4">
+                        {!selectedFood ? (
+                            <React.Fragment>
+                                <div className="relative">
+                                    <input 
+                                        type="text" 
+                                        placeholder="Buscar para agregar..." 
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                        autoFocus
+                                        className="w-full pl-10 pr-4 py-3 bg-white rounded-xl shadow-sm border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    />
+                                    <Search className="absolute left-4 top-4 text-gray-400" />
+                                </div>
+
+                                {foodList.length === 0 && (
+                                    <div className="text-center py-10 text-gray-400">
+                                        <Activity className="text-4xl mx-auto mb-3" />
+                                        <p>Cargando base de datos...</p>
+                                    </div>
+                                )}
+
+                                {searchTerm.length > 0 ? (
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                                        {filteredFoods.length === 0 ? (
+                                            <div className="p-8 text-center text-gray-400">
+                                                <Utensils className="text-4xl mx-auto mb-3 opacity-30" />
+                                                <p>No encontramos "{searchTerm}"</p>
+                                            </div>
+                                        ) : (
+                                            <div className="divide-y divide-gray-50">
+                                                {filteredFoods.map(food => (
+                                                    <button 
+                                                        key={food.id}
+                                                        onClick={() => setSelectedFood(food)}
+                                                        className="w-full text-left p-4 hover:bg-indigo-50 transition-colors flex justify-between items-center"
+                                                    >
+                                                        <div>
+                                                            <span className="font-bold text-gray-800 block">{food.name}</span>
+                                                            <span className="text-xs text-gray-500">{food.group} (100g)</span>
+                                                        </div>
+                                                        <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg">{food.kcal} kcal</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col gap-2">
+                                        {orderedGroups.map(group => (
+                                            <CollapsibleGroup key={group} title={group} count={groupedFoods[group].length} defaultOpen={false} headerClass="bg-gray-100 text-gray-700">
+                                                {groupedFoods[group].map(food => (
+                                                    <button 
+                                                        key={food.id}
+                                                        onClick={() => setSelectedFood(food)}
+                                                        className="w-full text-left p-4 hover:bg-indigo-50 transition-colors flex justify-between items-center"
+                                                    >
+                                                        <div>
+                                                            <span className="font-medium text-gray-800">{food.name}</span>
+                                                            <span className="text-xs text-gray-400 ml-1 font-normal">(100g)</span>
+                                                        </div>
+                                                        <span className="text-xs text-gray-500 bg-white border border-gray-100 px-2 py-1 rounded shadow-sm">{food.kcal} kcal</span>
+                                                    </button>
+                                                ))}
+                                            </CollapsibleGroup>
+                                        ))}
+                                    </div>
+                                )}
+                            </React.Fragment>
+                        ) : (
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mt-6">
+                                <h3 className="text-xl font-bold text-gray-800 mb-1">{selectedFood.name}</h3>
+                                <p className="text-sm text-gray-500 mb-6">{selectedFood.group}</p>
+                                
+                                <div className="space-y-4 mb-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Cantidad en gramos/ml:
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <input 
+                                                type="number" 
+                                                value={grams}
+                                                onChange={(e) => setGrams(e.target.value)}
+                                                placeholder="Ej. 100"
+                                                autoFocus
+                                                className="flex-1 text-2xl p-3 border-b-2 border-indigo-500 focus:outline-none bg-transparent"
+                                            />
+                                            <span className="self-end pb-3 text-gray-500 font-medium">g / ml</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Medida casera (Opcional):
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            value={measure}
+                                            onChange={(e) => setMeasure(e.target.value)}
+                                            placeholder="Ej. 1 taza, 2 rebanadas..."
+                                            className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:border-indigo-500 text-sm"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="bg-gray-50 p-4 rounded-xl mb-6 grid grid-cols-3 gap-2 text-center text-sm border border-gray-100">
+                                    <div>
+                                        <div className="font-bold text-blue-600">{((selectedFood.protein * (grams || 0)) / 100).toFixed(1)}g</div>
+                                        <div className="text-xs text-gray-400">Proteína</div>
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-green-600">{((selectedFood.carbs * (grams || 0)) / 100).toFixed(1)}g</div>
+                                        <div className="text-xs text-gray-400">Carbos</div>
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-yellow-600">{((selectedFood.fats * (grams || 0)) / 100).toFixed(1)}g</div>
+                                        <div className="text-xs text-gray-400">Grasas</div>
+                                    </div>
+                                </div>
+
+                                <button 
+                                    onClick={handleAdd}
+                                    disabled={!grams}
+                                    className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Confirmar Alimento
+                                </button>
+                                <button 
+                                    onClick={() => { setSelectedFood(null); setGrams(''); setMeasure(''); }}
+                                    className="w-full mt-3 text-gray-500 font-medium py-2 hover:text-gray-700"
+                                >
+                                    Volver a la lista
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const CalculatorView = ({ 
+            targetKcal, setTargetKcal, macros, setMacros, handleMacroChange, 
+            calculateGrams, totalPercentage, mealTimes, setMealTimes, foodList,
+            isSelectorOpen, setIsSelectorOpen, showConfirm, showAlert,
+            isMicrosExpanded, setIsMicrosExpanded, onSavePlanClick
+        }) => {
+            const [activeMealId, setActiveMealId] = useState(null); 
+            const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+            const [isAdequationExpanded, setIsAdequationExpanded] = useState(false);
+            const targetGrams = calculateGrams();
+
+            const allItems = mealTimes.flatMap(m => m.items);
+            
+            const initialTotals = { kcal: 0, p: 0, c: 0, f: 0, ...Object.fromEntries(MICRO_FIELDS.map(f => [f.key, 0])) };
+            
+            const planTotals = allItems.reduce((acc, item) => {
+                const ratio = item.grams / 100;
+                acc.kcal += item.food.kcal * ratio;
+                acc.p += item.food.protein * ratio;
+                acc.c += item.food.carbs * ratio;
+                acc.f += item.food.fats * ratio;
+                
+                MICRO_FIELDS.forEach(f => {
+                    acc[f.key] += (parseFloat(item.food.micros?.[f.key]) || 0) * ratio;
+                });
+                
+                return acc;
+            }, initialTotals);
+
+            const hasMicros = MICRO_FIELDS.some(f => planTotals[f.key] > 0);
+
+            const addMealTime = () => {
+                const newMeal = { id: Date.now(), time: '', name: `Comida ${mealTimes.length + 1}`, prepName: '', items: [] };
+                setMealTimes([...mealTimes, newMeal]);
+            };
+
+            const removeMealTime = (mealId) => {
+                showConfirm(
+                    "Eliminar Tiempo de Comida", 
+                    "¿Seguro que deseas eliminar este tiempo de comida y todos sus alimentos?", 
+                    () => setMealTimes(mealTimes.filter(m => m.id !== mealId))
+                );
+            };
+
+            const updateMealField = (mealId, field, value) => {
+                setMealTimes(mealTimes.map(m => m.id === mealId ? {...m, [field]: value} : m));
+            };
+
+            const openFoodSelector = (mealId) => {
+                setActiveMealId(mealId);
+                setIsSelectorOpen(true);
+            };
+
+            const handleAddFoodToPlan = (food, grams, measure) => {
+                const newItem = { id: Date.now(), food, grams, measure };
+                setMealTimes(mealTimes.map(meal => {
+                    if (meal.id === activeMealId) {
+                        return { ...meal, items: [...meal.items, newItem] };
+                    }
+                    return meal;
+                }));
+                setIsSelectorOpen(false);
+                setActiveMealId(null);
+            };
+
+            const removePlanItem = (mealId, itemId) => {
+                setMealTimes(mealTimes.map(meal => {
+                    if (meal.id === mealId) {
+                        return { ...meal, items: meal.items.filter(i => i.id !== itemId) };
+                    }
+                    return meal;
+                }));
+            };
+
+            const adeqPct = {
+                kcal: targetKcal > 0 ? ((planTotals.kcal / targetKcal) * 100) : 0,
+                p: targetGrams.p > 0 ? ((planTotals.p / targetGrams.p) * 100) : 0,
+                c: targetGrams.c > 0 ? ((planTotals.c / targetGrams.c) * 100) : 0,
+                f: targetGrams.f > 0 ? ((planTotals.f / targetGrams.f) * 100) : 0,
+            };
+
+            const getAdeqClass = (val) => {
+                if (val >= 90 && val <= 110) return 'bg-green-50 border-green-200 text-green-700';
+                return 'bg-amber-50 border-amber-200 text-amber-700';
+            };
+
+            // --- Exportación a Excel Nativo (.xlsx) con ExcelJS ---
+            const exportToExcel = async (selectedMicroKeys) => {
+                try {
+                    if (typeof ExcelJS === 'undefined' || typeof saveAs === 'undefined') {
+                        showAlert("Error", "Las librerías para exportar a Excel no cargaron. Revisa tu conexión a internet.");
+                        return;
+                    }
+
+                    const wb = new ExcelJS.Workbook();
+                    const ws = wb.addWorksheet('Minuta');
+
+                    const totalCols = 11 + selectedMicroKeys.length;
+                    const fullBorder = {
+                        top: { style: 'thin' }, left: { style: 'thin' },
+                        bottom: { style: 'thin' }, right: { style: 'thin' }
+                    };
+
+                    const colWidths = [10, 15, 25, 25, 12, 15, 12, 12, 12, 12, 15];
+                    selectedMicroKeys.forEach(() => colWidths.push(12));
+                    ws.columns = colWidths.map(w => ({ width: w }));
+
+                    const titleRow = ws.addRow(['PLANIFICACIÓN MINUTA PLAN ALIMENTARIO']);
+                    ws.mergeCells(1, 1, 1, totalCols);
+                    titleRow.getCell(1).font = { bold: true, size: 14 };
+                    titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+                    for (let i = 1; i <= totalCols; i++) titleRow.getCell(i).border = fullBorder;
+
+                    const headers = [
+                        'Horario', 'Tiempo de Comida', 'Nombre Preparación', 'Ingredientes', 'Cantidad gr/ml', 'Medida casera',
+                        'Calorías (Kcal)', 'Proteínas (g)', 'H. de C. (g)', 'Lípidos (g)', 'Fibra Dietética (g)'
+                    ];
+                    selectedMicroKeys.forEach(key => {
+                        const field = MICRO_FIELDS.find(f => f.key === key);
+                        headers.push(`${field.label} ${field.unit}`);
+                    });
+
+                    const headerRow = ws.addRow(headers);
+                    headerRow.eachCell((cell, colNum) => {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB4A7D6' } };
+                        cell.font = { bold: true, color: colNum > 11 ? { argb: 'FFC00000' } : { argb: 'FF000000' } };
+                        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                        cell.border = fullBorder;
+                    });
+
+                    let currentRow = 3;
+
+                    mealTimes.forEach(meal => {
+                        if (meal.items.length === 0) return;
+                        const startRow = currentRow;
+
+                        meal.items.forEach((item, index) => {
+                            const ratio = item.grams / 100;
+                            const kcal = Number((item.food.kcal * ratio).toFixed(2));
+                            const p = Number((item.food.protein * ratio).toFixed(2));
+                            const c = Number((item.food.carbs * ratio).toFixed(2));
+                            const f = Number((item.food.fats * ratio).toFixed(2));
+                            const fib = Number(((parseFloat(item.food.micros?.fiber) || 0) * ratio).toFixed(2));
+
+                            const rowValues = [
+                                index === 0 ? meal.time : '',
+                                index === 0 ? meal.name : '',
+                                index === 0 ? meal.prepName : '',
+                                item.food.name,
+                                `${item.grams} gr`,
+                                item.measure || '',
+                                kcal, p, c, f, fib
+                            ];
+
+                            selectedMicroKeys.forEach(key => {
+                                const val = Number(((parseFloat(item.food.micros?.[key]) || 0) * ratio).toFixed(2));
+                                rowValues.push(val);
+                            });
+
+                            const r = ws.addRow(rowValues);
+                            r.eachCell((cell, colNum) => {
+                                cell.border = fullBorder;
+                                if (colNum >= 7) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+                            });
+                            currentRow++;
+                        });
+
+                        const endRow = currentRow - 1;
+                        if (endRow > startRow) {
+                            ws.mergeCells(startRow, 1, endRow, 1);
+                            ws.mergeCells(startRow, 2, endRow, 2);
+                            ws.mergeCells(startRow, 3, endRow, 3);
+                        }
+
+                        ws.getCell(startRow, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D2E9' } };
+                        ws.getCell(startRow, 1).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                        ws.getCell(startRow, 1).font = { bold: true };
+
+                        ws.getCell(startRow, 2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D2E9' } };
+                        ws.getCell(startRow, 2).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                        ws.getCell(startRow, 2).font = { bold: true };
+                        
+                        ws.getCell(startRow, 3).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
+                        ws.addRow([]);
+                        currentRow++;
+                    });
+
+                    const totals = planTotals;
+                    const fibTotal = allItems.reduce((acc, i) => acc + ((parseFloat(i.food.micros?.fiber)||0) * (i.grams/100)), 0);
+                    const req = { kcal: targetKcal, p: targetGrams.p, c: targetGrams.c, f: targetGrams.f };
+
+                    const adeq = {
+                        kcal: req.kcal ? Number(((totals.kcal / req.kcal) * 100).toFixed(2)) : 0,
+                        p: req.p ? Number(((totals.p / req.p) * 100).toFixed(2)) : 0,
+                        c: req.c ? Number(((totals.c / req.c) * 100).toFixed(2)) : 0,
+                        f: req.f ? Number(((totals.f / req.f) * 100).toFixed(2)) : 0
+                    };
+
+                    const addFooterRow = (title, bgColor, isBold, dataArray) => {
+                        const rowValues = [title, '', '', '', '', '', ...dataArray];
+                        const r = ws.addRow(rowValues);
+                        ws.mergeCells(r.number, 1, r.number, 6);
+                        r.getCell(1).alignment = { horizontal: 'right', vertical: 'middle' };
+                        r.eachCell((cell, colNum) => {
+                            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
+                            cell.font = { bold: isBold };
+                            cell.border = fullBorder;
+                            if (colNum > 6) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+                        });
+                    };
+
+                    const aportesData = [
+                        Number(totals.kcal.toFixed(2)), Number(totals.p.toFixed(2)), Number(totals.c.toFixed(2)), Number(totals.f.toFixed(2)), Number(fibTotal.toFixed(2)),
+                        ...selectedMicroKeys.map(k => Number(totals[k].toFixed(2)))
+                    ];
+                    addFooterRow('Aportes nutrientes minuta', 'FF8E7CC3', true, aportesData);
+
+                    const reqData = [req.kcal, req.p, req.c, req.f, '-', ...selectedMicroKeys.map(() => '-')];
+                    addFooterRow('Requerimientos', 'FFB4A7D6', true, reqData);
+
+                    const adeqData = [adeq.kcal, adeq.p, adeq.c, adeq.f, '-', ...selectedMicroKeys.map(() => '-')];
+                    addFooterRow('Porcentaje Adecuación (%)', 'FFD9D2E9', true, adeqData);
+
+                    const uniqueSources = [...new Set(allItems.map(item => item.food.sourceLink).filter(link => link && link.trim() !== ''))];
+                    if (uniqueSources.length > 0) {
+                        ws.addRow([]); 
+                        const bibTitle = ws.addRow(['Bibliografía / Fuentes']);
+                        ws.mergeCells(bibTitle.number, 1, bibTitle.number, totalCols);
+                        bibTitle.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+                        bibTitle.getCell(1).font = { bold: true };
+                        bibTitle.getCell(1).border = fullBorder;
+
+                        uniqueSources.forEach((source, index) => {
+                            const srcRow = ws.addRow([`${index + 1}. ${source}`]);
+                            ws.mergeCells(srcRow.number, 1, srcRow.number, totalCols);
+                            srcRow.getCell(1).alignment = { horizontal: 'left' };
+                        });
+                    }
+
+                    const buffer = await wb.xlsx.writeBuffer();
+                    saveAs(new Blob([buffer]), 'Planificacion_Minuta.xlsx');
+                } catch (error) {
+                    console.error(error);
+                    showAlert("Error", "Ocurrió un problema al generar el archivo de Excel.");
+                }
+            };
+
+            // --- Exportación a Google Sheets (HTML en el portapapeles) ---
+            const exportToSheets = (selectedMicroKeys) => {
+                let html = `<table border="1" style="border-collapse: collapse; font-family: Arial, sans-serif;">`;
+
+                const totalCols = 11 + selectedMicroKeys.length;
+
+                html += `<tr><th colspan="${totalCols}" style="font-size: 18px; padding: 10px; text-align: center; text-transform: uppercase;">PLANIFICACIÓN MINUTA PLAN ALIMENTARIO</th></tr>`;
+
+                html += `<tr style="background-color: #b4a7d6; font-weight: bold; text-align: center; vertical-align: middle;">`;
+                html += `<th>Horario</th><th>Tiempo de Comida</th><th>Nombre Preparación</th><th>Ingredientes</th><th>Cantidad gr/ml</th><th>Medida casera</th>`;
+                html += `<th>Calorías (Kcal)</th><th>Proteínas (g)</th><th>H. de C. (g)</th><th>Lípidos (g)</th><th>Fibra Dietética (g)</th>`;
+                
+                selectedMicroKeys.forEach(key => {
+                    const field = MICRO_FIELDS.find(f => f.key === key);
+                    html += `<th style="color: #c00000;">${field.label} ${field.unit}</th>`;
+                });
+                html += `</tr>`;
+
+                mealTimes.forEach(meal => {
+                    if (meal.items.length === 0) return; 
+                    
+                    meal.items.forEach((item, index) => {
+                        html += `<tr>`;
+                        if (index === 0) {
+                            html += `<td rowspan="${meal.items.length}" style="background-color: #d9d2e9; text-align: center; vertical-align: middle; font-weight: bold; font-size: 14px;">${meal.time || ''}</td>`;
+                            html += `<td rowspan="${meal.items.length}" style="background-color: #d9d2e9; text-align: center; vertical-align: middle; font-weight: bold; font-size: 14px;">${meal.name || ''}</td>`;
+                            html += `<td rowspan="${meal.items.length}" style="text-align: center; vertical-align: middle; font-size: 12px;">${meal.prepName || ''}</td>`;
+                        }
+                        
+                        const ratio = item.grams / 100;
+                        const kcal = (item.food.kcal * ratio).toFixed(2);
+                        const p = (item.food.protein * ratio).toFixed(2);
+                        const c = (item.food.carbs * ratio).toFixed(2);
+                        const f = (item.food.fats * ratio).toFixed(2);
+                        const fib = ((parseFloat(item.food.micros?.fiber) || 0) * ratio).toFixed(2);
+
+                        html += `<td>${item.food.name}</td>`;
+                        html += `<td>${item.grams} gr</td>`;
+                        html += `<td>${item.measure || ''}</td>`;
+                        html += `<td>${kcal}</td><td>${p}</td><td>${c}</td><td>${f}</td><td>${fib}</td>`;
+                        
+                        selectedMicroKeys.forEach(key => {
+                            const val = ((parseFloat(item.food.micros?.[key]) || 0) * ratio).toFixed(2);
+                            html += `<td>${val}</td>`;
+                        });
+                        
+                        html += `</tr>`;
+                    });
+                    
+                    html += `<tr><td colspan="${totalCols}" style="height: 10px; border-left: none; border-right: none;"></td></tr>`;
+                });
+
+                const totals = planTotals;
+                const fibTotal = allItems.reduce((acc, i) => acc + ((parseFloat(i.food.micros?.fiber)||0) * (i.grams/100)), 0);
+
+                const req = { kcal: targetKcal, p: targetGrams.p, c: targetGrams.c, f: targetGrams.f };
+
+                const adeq = {
+                    kcal: req.kcal ? ((totals.kcal / req.kcal) * 100).toFixed(2) : 0,
+                    p: req.p ? ((totals.p / req.p) * 100).toFixed(2) : 0,
+                    c: req.c ? ((totals.c / req.c) * 100).toFixed(2) : 0,
+                    f: req.f ? ((totals.f / req.f) * 100).toFixed(2) : 0
+                };
+
+                html += `<tr style="background-color: #8e7cc3; font-weight: bold; text-align: right;">`;
+                html += `<td colspan="6">Aportes nutrientes minuta</td>`;
+                html += `<td>${totals.kcal.toFixed(2)}</td><td>${totals.p.toFixed(2)}</td><td>${totals.c.toFixed(2)}</td><td>${totals.f.toFixed(2)}</td><td>${fibTotal.toFixed(2)}</td>`;
+                selectedMicroKeys.forEach(k => html += `<td>${totals[k].toFixed(2)}</td>`);
+                html += `</tr>`;
+
+                html += `<tr style="background-color: #b4a7d6; font-weight: bold; text-align: right;">`;
+                html += `<td colspan="6">Requerimientos</td>`;
+                html += `<td>${req.kcal}</td><td>${req.p}</td><td>${req.c}</td><td>${req.f}</td><td>-</td>`;
+                selectedMicroKeys.forEach(k => html += `<td>-</td>`);
+                html += `</tr>`;
+
+                html += `<tr style="background-color: #d9d2e9; font-weight: bold; text-align: right;">`;
+                html += `<td colspan="6">Porcentaje Adecuación (%)</td>`;
+                html += `<td>${adeq.kcal}</td><td>${adeq.p}</td><td>${adeq.c}</td><td>${adeq.f}</td><td>-</td>`;
+                selectedMicroKeys.forEach(k => html += `<td>-</td>`);
+                html += `</tr>`;
+
+                const uniqueSources = [...new Set(allItems.map(item => item.food.sourceLink).filter(link => link && link.trim() !== ''))];
+                if (uniqueSources.length > 0) {
+                    html += `<tr><td colspan="${totalCols}" style="height: 20px; border: none;"></td></tr>`;
+                    html += `<tr><th colspan="${totalCols}" style="text-align: left; font-size: 14px; background-color: #e2efda; padding: 8px;">Bibliografía / Fuentes</th></tr>`;
+                    uniqueSources.forEach((source, index) => {
+                        html += `<tr><td colspan="${totalCols}" style="text-align: left; padding: 5px;">${index + 1}. ${source}</td></tr>`;
+                    });
+                }
+
+                html += `</table>`;
+
+                const div = document.createElement('div');
+                div.innerHTML = html;
+                div.style.position = 'absolute';
+                div.style.left = '-9999px';
+                document.body.appendChild(div);
+                
+                const range = document.createRange();
+                range.selectNodeContents(div);
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(range);
+                
+                try {
+                    document.execCommand('copy');
+                    showAlert("¡Copiado al Portapapeles!", "La tabla ha sido procesada con todos sus colores, formatos y celdas combinadas.\n\nAbre un documento de Google Sheets vacío y presiona Ctrl+V (o Cmd+V) para pegar el diseño idéntico.");
+                } catch (err) {
+                    showAlert("Error", "Tu navegador no permitió copiar la tabla automáticamente.");
+                }
+                
+                selection.removeAllRanges();
+                document.body.removeChild(div);
+            };
+
+            if (isSelectorOpen) {
+                return <FoodSelector foodList={foodList} onSelect={handleAddFoodToPlan} onCancel={() => setIsSelectorOpen(false)} />;
+            }
+
+            return (
+                <div className="flex flex-col gap-6 pb-32">
+                    
+                    <ExportModal 
+                        isOpen={isExportModalOpen} 
+                        onClose={() => setIsExportModalOpen(false)} 
+                        onExportSheets={exportToSheets} 
+                        onExportExcel={exportToExcel}
+                    />
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                <PieChart className="text-indigo-600" /> Configuración Diaria
+                            </h2>
+                            <button 
+                                onClick={() => setIsExportModalOpen(true)}
+                                className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center gap-1 border border-indigo-200"
+                            >
+                                Exportar <ChevronDown className="text-[10px]" />
+                            </button>
+                        </div>
+                        
+                        <div className="mb-4">
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Calorías Totales (Kcal)</label>
+                            <input 
+                                type="number" 
+                                value={targetKcal}
+                                onChange={(e) => setTargetKcal(e.target.value)}
+                                className="w-full text-3xl font-bold text-indigo-600 bg-gray-50 p-3 rounded-lg border-transparent focus:border-indigo-500 focus:ring-0 outline-none"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3 mb-2 text-center text-sm font-semibold text-gray-500">
+                            <div>Proteína</div>
+                            <div>Carbos</div>
+                            <div>Lípidos</div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3 mb-4">
+                            <div className="relative">
+                                <input 
+                                    type="number" 
+                                    value={macros.p || ''}
+                                    onChange={(e) => handleMacroChange('p', e.target.value)}
+                                    placeholder="0"
+                                    className="w-full p-2 text-center rounded-lg border border-blue-200 bg-blue-50 text-blue-800 focus:ring-2 focus:ring-blue-400 outline-none"
+                                />
+                                <span className="absolute right-2 top-2 text-xs text-blue-400">%</span>
+                            </div>
+                            <div className="relative">
+                                <input 
+                                    type="number" 
+                                    value={macros.c || ''}
+                                    onChange={(e) => handleMacroChange('c', e.target.value)}
+                                    placeholder="0"
+                                    className="w-full p-2 text-center rounded-lg border border-green-200 bg-green-50 text-green-800 focus:ring-2 focus:ring-green-400 outline-none"
+                                />
+                                <span className="absolute right-2 top-2 text-xs text-green-400">%</span>
+                            </div>
+                            <div className="relative">
+                                <input 
+                                    type="number" 
+                                    value={macros.f || ''}
+                                    onChange={(e) => handleMacroChange('f', e.target.value)}
+                                    placeholder="0"
+                                    className="w-full p-2 text-center rounded-lg border border-yellow-200 bg-yellow-50 text-yellow-800 focus:ring-2 focus:ring-yellow-400 outline-none"
+                                />
+                                <span className="absolute right-2 top-2 text-xs text-yellow-400">%</span>
+                            </div>
+                        </div>
+
+                        {totalPercentage !== 100 && (
+                            <div className="text-center text-red-500 text-sm mb-4 bg-red-50 p-2 rounded">
+                                ⚠️ La suma debe ser 100% (Actual: {totalPercentage || 0}%)
+                            </div>
+                        )}
+
+                        <div className="bg-gray-800 text-white p-5 rounded-xl text-center">
+                            <h3 className="text-xs uppercase tracking-widest text-gray-400 mb-4 font-semibold">Meta en Gramos</h3>
+                            <div className="flex justify-around items-start">
+                                <div className="flex flex-col items-center">
+                                    <span className="text-2xl font-bold text-blue-300 mb-1">{targetGrams.p}g</span>
+                                    <span className="text-xs text-gray-400 uppercase tracking-wide">Proteínas</span>
+                                </div>
+                                <div className="w-px h-10 bg-gray-600 mx-2"></div>
+                                <div className="flex flex-col items-center">
+                                    <span className="text-2xl font-bold text-green-300 mb-1">{targetGrams.c}g</span>
+                                    <span className="text-xs text-gray-400 uppercase tracking-wide">Carbohidratos</span>
+                                </div>
+                                <div className="w-px h-10 bg-gray-600 mx-2"></div>
+                                <div className="flex flex-col items-center">
+                                    <span className="text-2xl font-bold text-yellow-300 mb-1">{targetGrams.f}g</span>
+                                    <span className="text-xs text-gray-400 uppercase tracking-wide">Grasas</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Acordeón de Porcentaje de Adecuación */}
+                        <div className="mt-4">
+                            <button
+                                onClick={() => setIsAdequationExpanded(!isAdequationExpanded)}
+                                className="w-full flex justify-between items-center text-sm font-bold text-gray-700 bg-gray-50 p-3 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
+                            >
+                                <span className="flex items-center gap-2"><Info className="text-gray-400" /> Adecuación de Nutrientes</span>
+                                {isAdequationExpanded ? <ChevronUp /> : <ChevronDown />}
+                            </button>
+                            
+                            {isAdequationExpanded && (
+                                <div className="grid grid-cols-4 gap-2 mt-2">
+                                    <div className={`p-2 rounded-xl border text-center flex flex-col justify-center ${getAdeqClass(adeqPct.kcal)}`}>
+                                        <div className="text-[10px] uppercase font-bold mb-0.5 opacity-70">Kcal</div>
+                                        <div className="font-black text-sm">{adeqPct.kcal.toFixed(1)}%</div>
+                                    </div>
+                                    <div className={`p-2 rounded-xl border text-center flex flex-col justify-center ${getAdeqClass(adeqPct.p)}`}>
+                                        <div className="text-[10px] uppercase font-bold mb-0.5 opacity-70">Prot</div>
+                                        <div className="font-black text-sm">{adeqPct.p.toFixed(1)}%</div>
+                                    </div>
+                                    <div className={`p-2 rounded-xl border text-center flex flex-col justify-center ${getAdeqClass(adeqPct.c)}`}>
+                                        <div className="text-[10px] uppercase font-bold mb-0.5 opacity-70">Carb</div>
+                                        <div className="font-black text-sm">{adeqPct.c.toFixed(1)}%</div>
+                                    </div>
+                                    <div className={`p-2 rounded-xl border text-center flex flex-col justify-center ${getAdeqClass(adeqPct.f)}`}>
+                                        <div className="text-[10px] uppercase font-bold mb-0.5 opacity-70">Grasa</div>
+                                        <div className="font-black text-sm">{adeqPct.f.toFixed(1)}%</div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-4">
+                        <h2 className="text-xl font-bold text-gray-800 px-1 flex items-center justify-between">
+                            <span className="flex items-center gap-2">
+                                <BookOpen className="text-indigo-600" /> Mi Menú Diario
+                            </span>
+                            <span className="text-xs font-normal bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full border border-indigo-100">
+                                Total: {planTotals.kcal.toFixed(0)} / {targetKcal} kcal
+                            </span>
+                        </h2>
+
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                            <div className="flex justify-between text-xs text-gray-500 mb-2 font-medium">
+                                <span>Progreso Diario</span>
+                            </div>
+                            <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden flex">
+                                <div className="bg-blue-400 h-3 transition-all duration-500" style={{width: `${Math.min((planTotals.p / (targetGrams.p || 1)) * 100, 100)}%`}}></div>
+                                <div className="bg-green-400 h-3 transition-all duration-500" style={{width: `${Math.min((planTotals.c / (targetGrams.c || 1)) * 100, 100)}%`}}></div>
+                                <div className="bg-yellow-400 h-3 transition-all duration-500" style={{width: `${Math.min((planTotals.f / (targetGrams.f || 1)) * 100, 100)}%`}}></div>
+                            </div>
+                            <div className="flex justify-between text-xs text-gray-400 mt-2">
+                                <span>P: {planTotals.p.toFixed(0)}/{targetGrams.p}</span>
+                                <span>C: {planTotals.c.toFixed(0)}/{targetGrams.c}</span>
+                                <span>G: {planTotals.f.toFixed(0)}/{targetGrams.f}</span>
+                            </div>
+                        </div>
+
+                        {hasMicros && (
+                            <div className="bg-indigo-50 p-4 rounded-2xl shadow-sm border border-indigo-100">
+                                <button 
+                                    onClick={() => setIsMicrosExpanded(!isMicrosExpanded)}
+                                    className="w-full flex justify-between items-center focus:outline-none"
+                                >
+                                    <h3 className="text-xs font-bold text-indigo-800 uppercase tracking-wider flex items-center gap-1">
+                                        <Info /> Resumen de Micronutrientes
+                                    </h3>
+                                    {isMicrosExpanded ? <ChevronUp className="text-indigo-500" /> : <ChevronDown className="text-indigo-500" />}
+                                </button>
+                                
+                                {isMicrosExpanded && (
+                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mt-3">
+                                        {MICRO_FIELDS.map(f => {
+                                            if (planTotals[f.key] > 0) {
+                                                return (
+                                                    <div key={f.key} className="bg-white p-2 rounded-lg border border-indigo-100 text-center shadow-sm flex flex-col justify-center">
+                                                        <div className="text-sm font-bold text-gray-700">{planTotals[f.key].toFixed(1)}{f.unit}</div>
+                                                        <div className="text-[10px] text-gray-400 leading-tight mt-0.5">{f.label}</div>
+                                                    </div>
+                                                );
+                                            }
+                                            return null;
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {mealTimes.map((meal) => (
+                            <div key={meal.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+                                <div className="bg-indigo-50 p-3 grid grid-cols-12 gap-2 items-center border-b border-indigo-100">
+                                    <div className="col-span-3">
+                                        <input 
+                                            type="time" 
+                                            value={meal.time || ''}
+                                            onChange={(e) => updateMealField(meal.id, 'time', e.target.value)}
+                                            className="w-full bg-white border border-indigo-100 rounded p-1.5 text-xs text-gray-700 focus:outline-none focus:border-indigo-400"
+                                            title="Horario"
+                                        />
+                                    </div>
+                                    <div className="col-span-4">
+                                        <input 
+                                            type="text" 
+                                            value={meal.name}
+                                            onChange={(e) => updateMealField(meal.id, 'name', e.target.value)}
+                                            placeholder="Comida..."
+                                            className="w-full bg-transparent font-bold text-indigo-900 focus:outline-none focus:bg-white focus:border focus:border-indigo-200 rounded px-1 py-1"
+                                            title="Tiempo de Comida"
+                                        />
+                                    </div>
+                                    <div className="col-span-4">
+                                        <input 
+                                            type="text" 
+                                            value={meal.prepName || ''}
+                                            onChange={(e) => updateMealField(meal.id, 'prepName', e.target.value)}
+                                            placeholder="Preparación..."
+                                            className="w-full bg-white border border-indigo-100 rounded p-1.5 text-xs text-gray-700 focus:outline-none focus:border-indigo-400"
+                                            title="Nombre Preparación"
+                                        />
+                                    </div>
+                                    <div className="col-span-1 flex justify-end">
+                                        <button onClick={() => removeMealTime(meal.id)} className="text-indigo-300 hover:text-red-500 transition-colors p-1">
+                                            <X />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="p-2">
+                                    {meal.items.length === 0 ? (
+                                        <div className="text-center py-4 text-gray-400 text-sm italic">Sin alimentos</div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {meal.items.map(item => (
+                                                <div key={item.id} className="flex justify-between items-center bg-white p-2 rounded-lg border border-gray-100 hover:border-indigo-100 transition-colors">
+                                                    <div className="flex-1">
+                                                        <div className="font-semibold text-gray-800 text-sm">{item.food.name}</div>
+                                                        <div className="text-xs text-gray-500 flex gap-2">
+                                                            <span>{item.grams}g <span className="mx-1">•</span> {(item.food.kcal * item.grams / 100).toFixed(0)} kcal</span>
+                                                            {item.measure && <span className="text-indigo-500 italic bg-indigo-50 px-1 rounded">({item.measure})</span>}
+                                                        </div>
+                                                    </div>
+                                                    <button onClick={() => removePlanItem(meal.id, item.id)} className="text-red-300 hover:text-red-500 p-2 transition-colors">
+                                                        <Trash2 />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    
+                                    <button 
+                                        onClick={() => openFoodSelector(meal.id)}
+                                        className="w-full mt-3 py-2 border border-dashed border-indigo-200 rounded-lg flex items-center justify-center gap-1 text-indigo-600 text-sm font-medium hover:bg-indigo-50 transition-colors"
+                                    >
+                                        <Plus /> Agregar Alimento
+                                    </button>
+                                </div>
+                                
+                                {meal.items.length > 0 && (
+                                    <div className="bg-gray-50 px-4 py-2 text-xs text-gray-500 flex justify-end gap-3 border-t border-gray-100">
+                                        <span>{(meal.items.reduce((sum, i) => sum + (i.food.protein * i.grams/100), 0)).toFixed(1)}g P</span>
+                                        <span>{(meal.items.reduce((sum, i) => sum + (i.food.carbs * i.grams/100), 0)).toFixed(1)}g C</span>
+                                        <span>{(meal.items.reduce((sum, i) => sum + (i.food.fats * i.grams/100), 0)).toFixed(1)}g G</span>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+
+                        <button 
+                            onClick={addMealTime}
+                            className="w-full py-4 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 border border-gray-200 shadow-sm"
+                        >
+                            <PlusCircle /> Agregar Tiempo de Comida
+                        </button>
+
+                        <button 
+                            onClick={onSavePlanClick}
+                            className="w-full py-4 mt-2 bg-indigo-100 text-indigo-700 rounded-xl font-bold hover:bg-indigo-200 transition-colors flex items-center justify-center gap-2 border border-indigo-200 shadow-sm"
+                        >
+                            <Save /> Guardar Planificación
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const AddFoodView = ({ currentFood, setCurrentFood, handleSaveFood, showMicros, setShowMicros, activeTab, setActiveTab }) => (
+            <div className="pb-32">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                        {currentFood.id ? <Edit2 className="text-indigo-600"/> : <PlusCircle className="text-indigo-600"/>}
+                        {currentFood.id ? 'Editar Alimento Local' : 'Crear Nuevo Alimento'}
+                    </h2>
+
+                    <form className="flex flex-col gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del Alimento</label>
+                            <input 
+                                required
+                                type="text" 
+                                placeholder="Ej. Pechuga de pollo"
+                                value={currentFood.name}
+                                onChange={(e) => setCurrentFood({...currentFood, name: e.target.value})}
+                                className="w-full p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Grupo Oficial</label>
+                            <div className="relative">
+                                <select 
+                                    value={currentFood.group}
+                                    onChange={(e) => setCurrentFood({...currentFood, group: e.target.value})}
+                                    className="w-full p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none appearance-none bg-white"
+                                >
+                                    {FOOD_GROUPS.map(g => (
+                                        <option key={g} value={g}>{g}</option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="absolute right-4 top-4 text-gray-400 pointer-events-none" />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Kcal (100g)</label>
+                                <input 
+                                    type="number" 
+                                    placeholder="0"
+                                    value={currentFood.kcal}
+                                    onChange={(e) => setCurrentFood({...currentFood, kcal: e.target.value})}
+                                    className="w-full p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Fuente</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="Ej. Tabla USDA..."
+                                    value={currentFood.sourceLink}
+                                    onChange={(e) => setCurrentFood({...currentFood, sourceLink: e.target.value})}
+                                    className="w-full p-3 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                            <h3 className="text-sm font-semibold text-gray-500 mb-3">Macronutrientes (por 100g)</h3>
+                            <div className="grid grid-cols-3 gap-3">
+                                <div>
+                                    <label className="text-xs text-blue-600 block mb-1">Proteína</label>
+                                    <input 
+                                        type="number" 
+                                        placeholder="0"
+                                        value={currentFood.protein}
+                                        onChange={(e) => setCurrentFood({...currentFood, protein: e.target.value})}
+                                        className="w-full p-2 bg-white border border-gray-200 rounded-md focus:border-blue-500 outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-green-600 block mb-1">Carbos</label>
+                                    <input 
+                                        type="number" 
+                                        placeholder="0"
+                                        value={currentFood.carbs}
+                                        onChange={(e) => setCurrentFood({...currentFood, carbs: e.target.value})}
+                                        className="w-full p-2 bg-white border border-gray-200 rounded-md focus:border-green-500 outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs text-yellow-600 block mb-1">Grasas</label>
+                                    <input 
+                                        type="number" 
+                                        placeholder="0"
+                                        value={currentFood.fats}
+                                        onChange={(e) => setCurrentFood({...currentFood, fats: e.target.value})}
+                                        className="w-full p-2 bg-white border border-gray-200 rounded-md focus:border-yellow-500 outline-none"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <button 
+                                type="button"
+                                onClick={() => setShowMicros(!showMicros)}
+                                className="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                            >
+                                {showMicros ? <ChevronUp className="mr-2"/> : <ChevronDown className="mr-2"/>}
+                                {showMicros ? 'Ocultar Micronutrientes' : 'Agregar Micronutrientes'}
+                            </button>
+                            
+                            {showMicros && (
+                                <div className="mt-3 grid grid-cols-2 gap-3 p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                                    {MICRO_FIELDS.map(f => (
+                                        <div key={f.key} className="flex flex-col">
+                                            <input 
+                                                placeholder={`${f.label} (${f.unit})`} 
+                                                className="p-2 rounded border border-indigo-200 text-sm focus:outline-none focus:border-indigo-500" 
+                                                value={currentFood.micros[f.key] || ''} 
+                                                onChange={(e) => setCurrentFood({
+                                                    ...currentFood, 
+                                                    micros: { ...currentFood.micros, [f.key]: e.target.value }
+                                                })} 
+                                            />
+                                        </div>
+                                    ))}
+                                    <div className="col-span-2">
+                                        <input 
+                                            placeholder="Otros / Notas adicionales" 
+                                            className="w-full p-2 rounded border border-indigo-200 text-sm focus:outline-none focus:border-indigo-500" 
+                                            value={currentFood.micros.other || ''} 
+                                            onChange={(e) => setCurrentFood({
+                                                ...currentFood, 
+                                                micros: { ...currentFood.micros, other: e.target.value }
+                                            })} 
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex flex-col gap-3 pt-4">
+                             {currentFood.id ? (
+                                 <div className="flex gap-2">
+                                     <button type="button" onClick={() => {setCurrentFood(INITIAL_FOOD_STATE); setActiveTab('historyPersonal');}} className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-300 transition-colors">Cancelar</button>
+                                     <button type="button" onClick={(e) => handleSaveFood(e)} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold shadow-md flex justify-center items-center gap-2 hover:bg-indigo-700 transition-colors"><Save /> Actualizar</button>
+                                 </div>
+                             ) : (
+                                 <button type="button" onClick={(e) => handleSaveFood(e)} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg flex justify-center items-center gap-2 hover:bg-indigo-700 transition"><Save /> Guardar en Mi Personal</button>
+                             )}
+                        </div>
+                    </form>
+                </div>
+            </div>
+        );
+
+        // --- COMPONENTE UNIFICADO: HISTORIAL DE ALIMENTOS (TCA / Personal) ---
+        const FoodHistoryView = ({ foodList, isTCAView, handleEditClick, handleDeleteClick, handleImportCSV, showConfirm }) => {
+            const [searchTerm, setSearchTerm] = useState('');
+            const [selectedFoodInfo, setSelectedFoodInfo] = useState(null);
+
+            // Filtrar según la pestaña elegida (TCA o Personal)
+            const displayedFoods = foodList.filter(f => isTCAView ? f.isTCA : !f.isTCA);
+
+            const normalizeStr = (str) => {
+                if(!str) return "";
+                return str.toString().trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            };
+
+            const searchWords = normalizeStr(searchTerm).split(' ').filter(w => w.length > 0);
+
+            const searchFiltered = displayedFoods.filter(f => {
+                if (searchWords.length === 0) return true;
+                const normalizedName = normalizeStr(f.name);
+                return searchWords.every(word => normalizedName.includes(word));
+            });
+
+            // LÓGICA DE AGRUPACIÓN (Se preserva el orden original explícito)
+            const groupedFoods = searchTerm.length === 0 ? searchFiltered.reduce((acc, food) => {
+                let groupName = cleanGroupString(food.group);
+                const matched = FOOD_GROUPS.find(g => normalizeStr(g) === normalizeStr(groupName));
+                groupName = matched || "Otros (Sin clasificar)";
+
+                if (!acc[groupName]) acc[groupName] = [];
+                acc[groupName].push(food);
+                return acc;
+            }, {}) : {};
+
+            const orderedGroups = [...FOOD_GROUPS, "Otros (Sin clasificar)"].filter(g => groupedFoods[g]);
+
+            // Confirmación de borrado personalizada
+            const confirmDelete = (foodId, foodName) => {
+                showConfirm(
+                    "Eliminar Alimento", 
+                    `¿Seguro que deseas eliminar "${foodName}" de tu historial personal permanentemente?`,
+                    () => handleDeleteClick(foodId)
+                );
+            };
+
+            return (
+                <div className="pb-32 flex flex-col gap-4">
+                    <div className={`border p-4 rounded-xl flex items-start gap-3 ${isTCAView ? 'bg-indigo-50 border-indigo-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                        {isTCAView ? <BookOpen className="text-indigo-600 text-2xl mt-1" /> : <ClipboardList className="text-emerald-600 text-2xl mt-1" />}
+                        <div>
+                            <h3 className={`font-bold ${isTCAView ? 'text-indigo-800' : 'text-emerald-800'}`}>
+                                {isTCAView ? 'Historial TCA 2018' : 'Historial Personal'}
+                            </h3>
+                            <p className={`text-xs mt-1 ${isTCAView ? 'text-indigo-600' : 'text-emerald-600'}`}>
+                                {isTCAView ? 'Base de datos oficial. Solo modo lectura.' : 'Tus propios alimentos guardados o importados. Puedes editar y eliminar.'}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                        <div className="relative flex-1">
+                            <input 
+                                type="text" 
+                                placeholder="Buscar alimento..." 
+                                value={searchTerm} 
+                                onChange={(e) => setSearchTerm(e.target.value)} 
+                                className="w-full pl-10 pr-4 py-3 bg-white rounded-xl shadow-sm border border-gray-100 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                            />
+                            <Search className="absolute left-4 top-4 text-gray-400" />
+                        </div>
+                        
+                        {!isTCAView && (
+                            <React.Fragment>
+                                <input type="file" accept=".csv" id="csvUpload" style={{ display: 'none' }} onChange={handleImportCSV} />
+                                <button onClick={() => document.getElementById('csvUpload').click()} className="bg-emerald-100 text-emerald-700 px-4 rounded-xl font-bold flex flex-col items-center justify-center hover:bg-emerald-200 transition border border-emerald-200" title="Importar CSV">
+                                    <UploadIcon className="text-xl mb-1" />
+                                    <span className="text-[10px]">Importar</span>
+                                </button>
+                            </React.Fragment>
+                        )}
+                    </div>
+
+                    {searchTerm.length > 0 ? (
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                            {searchFiltered.length === 0 ? (
+                                <div className="p-8 text-center text-gray-400">
+                                    <Utensils className="text-4xl mx-auto mb-3 opacity-30" />
+                                    <p>No se encontraron alimentos con "{searchTerm}".</p>
+                                </div>
+                            ) : (
+                                <div className="divide-y divide-gray-50">
+                                    {searchFiltered.map(food => (
+                                        <div key={food.id} className="p-4 flex justify-between items-center hover:bg-gray-50 transition-colors gap-2">
+                                            <div className="flex-1 overflow-hidden pr-2">
+                                                <div className="font-bold text-gray-800 text-sm truncate">{food.name}</div>
+                                                <div className="text-xs text-gray-500">{food.group} • {food.kcal} kcal</div>
+                                            </div>
+                                            
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setSelectedFoodInfo(food)} className="bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-colors shadow-sm">
+                                                    Ver Info
+                                                </button>
+                                                
+                                                {!isTCAView && (
+                                                    <React.Fragment>
+                                                        <button onClick={() => handleEditClick(food)} className="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-200 transition-colors shadow-sm" title="Editar">
+                                                            <Edit2 />
+                                                        </button>
+                                                        <button onClick={() => confirmDelete(food.id, food.name)} className="bg-red-100 text-red-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-200 transition-colors shadow-sm" title="Eliminar">
+                                                            <Trash2 />
+                                                        </button>
+                                                    </React.Fragment>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ) : Object.keys(groupedFoods).length === 0 ? (
+                        <div className="text-center py-10 text-gray-500">
+                            <Utensils className="text-4xl mx-auto mb-3 text-gray-300" />
+                            <p>No se encontraron alimentos en este historial.</p>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-2">
+                            {orderedGroups.map(groupName => (
+                                <CollapsibleGroup key={groupName} title={groupName} count={groupedFoods[groupName].length} defaultOpen={false} headerClass="bg-gray-800 text-white">
+                                    {groupedFoods[groupName].map(food => (
+                                        <div key={food.id} className="p-4 flex justify-between items-center hover:bg-gray-50 transition-colors gap-2">
+                                            <div className="flex-1 overflow-hidden pr-2">
+                                                <div className="font-semibold text-gray-700 text-sm truncate">{food.name}</div>
+                                                <div className="text-xs text-gray-400">{food.kcal} kcal</div>
+                                            </div>
+                                            
+                                            <div className="flex gap-2">
+                                                <button onClick={() => setSelectedFoodInfo(food)} className="bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-colors shadow-sm">
+                                                    Ver Info
+                                                </button>
+                                                
+                                                {!isTCAView && (
+                                                    <React.Fragment>
+                                                        <button onClick={() => handleEditClick(food)} className="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-200 transition-colors shadow-sm" title="Editar">
+                                                            <Edit2 />
+                                                        </button>
+                                                        <button onClick={() => confirmDelete(food.id, food.name)} className="bg-red-100 text-red-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-red-200 transition-colors shadow-sm" title="Eliminar">
+                                                            <Trash2 />
+                                                        </button>
+                                                    </React.Fragment>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </CollapsibleGroup>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Modal de Información Nutricional con Micronutrientes Completos */}
+                    {selectedFoodInfo && (
+                        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90vh] transform transition-all">
+                                <div className="p-4 bg-indigo-600 text-white flex justify-between items-start gap-2">
+                                    <div>
+                                        <h3 className="font-bold text-lg leading-tight">{selectedFoodInfo.name}</h3>
+                                        <p className="text-xs text-indigo-200 mt-1">{selectedFoodInfo.group}</p>
+                                    </div>
+                                    <button onClick={() => setSelectedFoodInfo(null)} className="text-white hover:text-gray-200 transition-colors p-1">
+                                        <X className="text-xl" />
+                                    </button>
+                                </div>
+                                
+                                <div className="p-5 overflow-y-auto bg-gray-50">
+                                    <div className="grid grid-cols-4 gap-2 mb-6">
+                                        <div className="bg-white p-2 rounded-xl border border-gray-200 text-center shadow-sm flex flex-col justify-center">
+                                            <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Kcal</div>
+                                            <div className="font-black text-gray-800 text-sm">{selectedFoodInfo.kcal}</div>
+                                        </div>
+                                        <div className="bg-blue-50 p-2 rounded-xl border border-blue-200 text-center shadow-sm flex flex-col justify-center">
+                                            <div className="text-[10px] text-blue-500 uppercase font-bold mb-1">Prot</div>
+                                            <div className="font-black text-blue-700 text-sm">{selectedFoodInfo.protein}g</div>
+                                        </div>
+                                        <div className="bg-green-50 p-2 rounded-xl border border-green-200 text-center shadow-sm flex flex-col justify-center">
+                                            <div className="text-[10px] text-green-500 uppercase font-bold mb-1">Carb</div>
+                                            <div className="font-black text-green-700 text-sm">{selectedFoodInfo.carbs}g</div>
+                                        </div>
+                                        <div className="bg-yellow-50 p-2 rounded-xl border border-yellow-200 text-center shadow-sm flex flex-col justify-center">
+                                            <div className="text-[10px] text-yellow-600 uppercase font-bold mb-1">Grasa</div>
+                                            <div className="font-black text-yellow-700 text-sm">{selectedFoodInfo.fats}g</div>
+                                        </div>
+                                    </div>
+
+                                    {selectedFoodInfo.micros && (
+                                        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                                            <h4 className="font-bold text-gray-800 text-xs uppercase tracking-wider mb-3 border-b pb-2">Detalle de Micronutrientes</h4>
+                                            <div className="space-y-2.5 text-sm">
+                                                {MICRO_FIELDS.map(f => {
+                                                    const val = selectedFoodInfo.micros[f.key];
+                                                    if (val !== '' && val !== undefined && val !== null) {
+                                                        return (
+                                                            <div key={f.key} className="flex justify-between items-center border-b border-gray-50 pb-1">
+                                                                <span className="text-gray-500 font-medium">{f.label}</span>
+                                                                <span className="font-bold text-gray-700">{val} {f.unit}</span>
+                                                            </div>
+                                                        );
+                                                    }
+                                                    return null;
+                                                })}
+                                                
+                                                {selectedFoodInfo.micros.other && (
+                                                    <div className="flex flex-col mt-3">
+                                                        <span className="text-gray-500 text-xs mb-1 font-medium">Otros / Notas:</span>
+                                                        <span className="font-medium text-sm text-gray-800 bg-yellow-50 border border-yellow-200 p-2 rounded">{selectedFoodInfo.micros.other}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {selectedFoodInfo.sourceLink && (
+                                        <div className="mt-4 text-center text-xs text-gray-400 font-medium">
+                                            Fuente: {selectedFoodInfo.sourceLink}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )
+        };
+
+        // --- Componente: Pestaña de Planificaciones Guardadas ---
+        const SavedPlansView = ({ savedPlans, onLoad, onDelete }) => (
+            <div className="pb-32 flex flex-col gap-4">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-2">
+                        <Bookmark className="text-indigo-600" /> Planificaciones Guardadas
+                    </h2>
+                    <p className="text-sm text-gray-500 mb-4">Carga o elimina tus minutas guardadas previamente.</p>
+
+                    {savedPlans.length === 0 ? (
+                        <div className="text-center py-10 text-gray-400">
+                            <Bookmark className="text-4xl mx-auto mb-3 opacity-30" />
+                            <p>No tienes planificaciones guardadas.</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {savedPlans.map(plan => (
+                                <div key={plan.id} className="p-4 rounded-xl border border-gray-100 hover:border-indigo-100 transition-colors flex flex-col gap-3 bg-gray-50">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <h3 className="font-bold text-gray-800">{plan.name}</h3>
+                                            <div className="text-xs text-gray-500 mt-1">
+                                                {plan.targetKcal} kcal • {plan.mealTimes.length} comidas
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] text-gray-400 bg-white px-2 py-1 rounded border shadow-sm">
+                                            {new Date(plan.date).toLocaleDateString()}
+                                        </span>
+                                    </div>
+                                    <div className="flex gap-2 w-full mt-1">
+                                        <button 
+                                            onClick={() => onLoad(plan)} 
+                                            className="flex-1 bg-indigo-100 text-indigo-700 py-2 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-colors"
+                                        >
+                                            Cargar Plan
+                                        </button>
+                                        <button 
+                                            onClick={() => onDelete(plan.id, plan.name)} 
+                                            className="bg-red-100 text-red-700 px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-200 transition-colors"
+                                            title="Eliminar"
+                                        >
+                                            <Trash2 />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+
+        // --- Componente Principal ---
+        function App() {
+            const [view, setView] = useState('welcome');
+            const [activeTab, setActiveTab] = useState('calculator'); // tabs: calculator, add, historyTca, historyPersonal, saved
+            const [isSelectorOpen, setIsSelectorOpen] = useState(false);
+            
+            const [targetKcal, setTargetKcal] = useState(2000);
+            const [macros, setMacros] = useState({ p: 25, c: 50, f: 25 });
+            const [mealTimes, setMealTimes] = useState([
+                { id: 1, time: '07:00', name: 'Desayuno', prepName: '', items: [] },
+                { id: 2, time: '13:00', name: 'Almuerzo', prepName: '', items: [] },
+                { id: 3, time: '20:00', name: 'Cena', prepName: '', items: [] }
+            ]);
+            
+            const [foodList, setFoodList] = useState([]);
+            const [currentFood, setCurrentFood] = useState(INITIAL_FOOD_STATE);
+            
+            // Estado de Planificaciones Guardadas
+            const [savedPlans, setSavedPlans] = useState([]);
+            
+            // Estados para desplegables
+            const [showMicros, setShowMicros] = useState(false);
+            const [isMicrosExpanded, setIsMicrosExpanded] = useState(false);
+            const [isSavePlanModalOpen, setIsSavePlanModalOpen] = useState(false);
+
+            // Estado para el Modal Personalizado
+            const [modalState, setModalState] = useState({ isOpen: false, title: '', message: '', onConfirm: null, type: 'alert' });
+
+            const showConfirm = (title, message, onConfirm) => {
+                setModalState({ isOpen: true, title, message, onConfirm, type: 'confirm' });
+            };
+
+            const showAlert = (title, message) => {
+                setModalState({ isOpen: true, title, message, onConfirm: null, type: 'alert' });
+            };
+
+            const closeModal = () => {
+                setModalState(prev => ({ ...prev, isOpen: false }));
+            };
+
+            // CARGA INICIAL DE DATOS
+            useEffect(() => {
+                const savedFoods = localStorage.getItem('myNutriFoods');
+                const savedKcal = localStorage.getItem('myTargetKcal');
+                const savedMacros = localStorage.getItem('myMacros');
+                const savedMeals = localStorage.getItem('myNutriMealTimes');
+                const savedPlansData = localStorage.getItem('myNutriSavedPlans');
+
+                let initialFoods = [];
+                
+                // Cargar datos de baseDeDatos.js y marcarlos como TCA oficial (isTCA: true)
+                if (typeof window.ALIMENTOS_PRECARGADOS !== 'undefined') {
+                    initialFoods = window.ALIMENTOS_PRECARGADOS.map(f => ({...f, isTCA: true}));
+                }
+
+                // Cargar datos personales del localStorage y marcarlos como Personal (isTCA: false)
+                if (savedFoods) {
+                    const localFoods = JSON.parse(savedFoods);
+                    const newLocalFoods = localFoods.filter(lf => !initialFoods.some(pf => pf.id === lf.id));
+                    initialFoods = [...initialFoods, ...newLocalFoods.map(f => ({...f, isTCA: false}))];
+                }
+                
+                setFoodList(initialFoods);
+
+                if (savedKcal) setTargetKcal(JSON.parse(savedKcal));
+                if (savedMacros) setMacros(JSON.parse(savedMacros));
+                if (savedMeals) setMealTimes(JSON.parse(savedMeals));
+                if (savedPlansData) setSavedPlans(JSON.parse(savedPlansData));
+            }, []);
+
+            useEffect(() => { localStorage.setItem('myNutriFoods', JSON.stringify(foodList.filter(f => !f.isTCA))); }, [foodList]);
+            useEffect(() => { 
+                localStorage.setItem('myTargetKcal', JSON.stringify(targetKcal));
+                localStorage.setItem('myMacros', JSON.stringify(macros));
+            }, [targetKcal, macros]);
+            useEffect(() => { localStorage.setItem('myNutriMealTimes', JSON.stringify(mealTimes)); }, [mealTimes]);
+            useEffect(() => { localStorage.setItem('myNutriSavedPlans', JSON.stringify(savedPlans)); }, [savedPlans]);
+
+            const handleMacroChange = (key, value) => {
+                const newValue = value === '' ? '' : parseFloat(value);
+                setMacros(prev => ({ ...prev, [key]: newValue }));
+            };
+
+            const calculateGrams = () => {
+                const pGrams = (targetKcal * ((macros.p || 0) / 100)) / 4;
+                const cGrams = (targetKcal * ((macros.c || 0) / 100)) / 4;
+                const fGrams = (targetKcal * ((macros.f || 0) / 100)) / 9;
+                return { p: Math.round(pGrams), c: Math.round(cGrams), f: Math.round(fGrams) };
+            };
+
+            const totalPercentage = (macros.p || 0) + (macros.c || 0) + (macros.f || 0);
+
+            const handleImportCSV = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    const lines = text.split('\n');
+                    let headerFound = false;
+                    let currentGroup = "Importado";
+                    const newFoods = [];
+                    
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i].trim();
+                        if (!line) continue;
+                        const row = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(cell => cell.trim().replace(/^"|"$/g, ''));
+                        
+                        if (!headerFound) {
+                            if (row.includes('Energía(kcal)') || row.includes('Proteínas (g)') || line.includes('Energía(kcal)')) {
+                                headerFound = true;
+                                if (row[0] && row[0].length > 3 && !row[0].includes('Energía')) {
+                                    currentGroup = row[0];
+                                }
+                            }
+                            continue;
+                        }
+                        
+                        if (row.length < 10) continue; 
+                        
+                        const name = row[0];
+                        if (!name || name.toUpperCase() === 'EN BLANCO' || name.toLowerCase().includes('fuentes/referencias')) continue;
+                        
+                        const kcalRaw = row[4];
+                        if (!kcalRaw || isNaN(parseFloat(kcalRaw))) {
+                            if (name.length > 3) currentGroup = name;
+                            continue;
+                        }
+                        
+                        const food = {
+                            id: Date.now().toString() + '-' + i,
+                            name: name,
+                            group: currentGroup || "Otros",
+                            kcal: parseFloat(row[4]) || 0,
+                            protein: parseFloat(row[7]) || 0,
+                            carbs: parseFloat(row[8]) || 0,
+                            fats: parseFloat(row[11]) || 0,
+                            sourceLink: row[2] || 'Base de Datos Importada',
+                            isTCA: false, 
+                            micros: {
+                                ...Object.fromEntries(MICRO_FIELDS.map(f => [f.key, ''])),
+                                vitC: parseFloat(row[18]) || '',
+                                sodium: parseFloat(row[29]) || '',
+                                calcium: parseFloat(row[31]) || '',
+                                iron: parseFloat(row[34]) || '',
+                                fiber: parseFloat(row[9]) || '',
+                                sugars: parseFloat(row[10]) || '',
+                            }
+                        };
+                        newFoods.push(food);
+                    }
+                    
+                    if(newFoods.length > 0) {
+                        setFoodList(prev => {
+                            const newUniqueFoods = newFoods.filter(nf => !prev.some(pf => pf.name === nf.name));
+                            return [...prev, ...newUniqueFoods];
+                        });
+                        showAlert("Importación Exitosa", `Se importaron ${newFoods.length} alimentos a tu Historial Personal.`);
+                    } else {
+                        showAlert("Error de Importación", "No se detectaron alimentos válidos. Asegúrate de guardar el archivo como 'CSV delimitado por comas'.");
+                    }
+                };
+                reader.readAsText(file);
+                event.target.value = '';
+            };
+
+            const handleSaveFood = async (e) => {
+                e.preventDefault();
+                if (!currentFood.name) { 
+                    showAlert("Faltan datos", "Por favor, ponle un nombre al alimento."); 
+                    return; 
+                }
+
+                const isEditing = !!currentFood.id;
+                const foodToSave = isEditing ? currentFood : { ...currentFood, id: Date.now().toString(), isTCA: false };
+
+                if (isEditing) setFoodList(prev => prev.map(item => item.id === foodToSave.id ? foodToSave : item));
+                else setFoodList(prev => [...prev, foodToSave]);
+                
+                setCurrentFood(INITIAL_FOOD_STATE);
+                setShowMicros(false);
+                setActiveTab('historyPersonal');
+            };
+
+            const handleEditClick = (food) => { 
+                setCurrentFood(food); 
+                setActiveTab('add'); 
+            };
+            
+            const handleDeleteClick = (id) => {
+                setFoodList(prev => prev.filter(item => item.id !== id));
+            };
+
+            // --- Lógica para Guardar y Cargar Planificaciones ---
+            const handleSaveCurrentPlan = (name) => {
+                const newPlan = {
+                    id: Date.now(),
+                    name: name,
+                    targetKcal,
+                    macros,
+                    mealTimes,
+                    date: new Date().toISOString()
+                };
+                setSavedPlans([...savedPlans, newPlan]);
+                showAlert("Planificación Guardada", `La minuta "${name}" ha sido guardada en la pestaña 'Guardados'.`);
+            };
+
+            const handleLoadPlan = (plan) => {
+                showConfirm(
+                    "Cargar Planificación", 
+                    `¿Deseas reemplazar tu configuración y minuta actual con "${plan.name}"? Los datos no guardados de tu vista actual se perderán.`, 
+                    () => {
+                        setTargetKcal(plan.targetKcal);
+                        setMacros(plan.macros);
+                        setMealTimes(plan.mealTimes);
+                        setActiveTab('calculator');
+                        showAlert("Planificación Cargada", `Se ha cargado "${plan.name}" exitosamente.`);
+                    }
+                );
+            };
+
+            const handleDeleteSavedPlan = (id, name) => {
+                showConfirm(
+                    "Eliminar Planificación",
+                    `¿Seguro que deseas eliminar permanentemente la planificación "${name}"?`,
+                    () => {
+                        setSavedPlans(prev => prev.filter(p => p.id !== id));
+                    }
+                );
+            };
+
+            if (view === 'welcome') return <WelcomeScreen onStart={() => setView('app')} />;
+
+            return (
+                <div className="min-h-screen font-sans text-gray-900 pb-24 bg-gray-50">
+                    <CustomModalUI 
+                        isOpen={modalState.isOpen}
+                        title={modalState.title}
+                        message={modalState.message}
+                        onConfirm={modalState.onConfirm}
+                        type={modalState.type}
+                        onClose={closeModal}
+                    />
+
+                    <SavePlanModal 
+                        isOpen={isSavePlanModalOpen}
+                        onClose={() => setIsSavePlanModalOpen(false)}
+                        onSave={handleSaveCurrentPlan}
+                    />
+
+                    <header className="bg-indigo-600 text-white p-4 shadow-md sticky top-0 z-20 flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                            <div className="bg-white/20 p-2 rounded-lg flex items-center justify-center">
+                                <Apple className="text-green-300" />
+                            </div>
+                            <h1 className="text-xl font-bold flex items-center gap-2">
+                                PlannerN
+                            </h1>
+                        </div>
+                        <button onClick={() => setView('welcome')} className="p-2 hover:bg-indigo-500 rounded-lg transition-colors"><Home/></button>
+                    </header>
+
+                    <main className="p-4 max-w-md mx-auto">
+                        {activeTab === 'calculator' && <CalculatorView targetKcal={targetKcal} setTargetKcal={setTargetKcal} macros={macros} setMacros={setMacros} handleMacroChange={handleMacroChange} calculateGrams={calculateGrams} totalPercentage={totalPercentage} mealTimes={mealTimes} setMealTimes={setMealTimes} foodList={foodList} isSelectorOpen={isSelectorOpen} setIsSelectorOpen={setIsSelectorOpen} showConfirm={showConfirm} showAlert={showAlert} isMicrosExpanded={isMicrosExpanded} setIsMicrosExpanded={setIsMicrosExpanded} onSavePlanClick={() => setIsSavePlanModalOpen(true)} />}
+                        {activeTab === 'add' && <AddFoodView currentFood={currentFood} setCurrentFood={setCurrentFood} handleSaveFood={handleSaveFood} showMicros={showMicros} setShowMicros={setShowMicros} activeTab={activeTab} setActiveTab={setActiveTab} />}
+                        {activeTab === 'historyTca' && <FoodHistoryView foodList={foodList} isTCAView={true} handleEditClick={handleEditClick} handleDeleteClick={handleDeleteClick} handleImportCSV={handleImportCSV} showConfirm={showConfirm} showAlert={showAlert} />}
+                        {activeTab === 'historyPersonal' && <FoodHistoryView foodList={foodList} isTCAView={false} handleEditClick={handleEditClick} handleDeleteClick={handleDeleteClick} handleImportCSV={handleImportCSV} showConfirm={showConfirm} showAlert={showAlert} />}
+                        {activeTab === 'saved' && <SavedPlansView savedPlans={savedPlans} onLoad={handleLoadPlan} onDelete={handleDeleteSavedPlan} />}
+                    </main>
+
+                    <nav className="fixed bottom-0 w-full bg-white border-t border-gray-200 z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+                        <div className="flex justify-between items-center max-w-md mx-auto px-1 py-1">
+                            <button onClick={() => { setActiveTab('calculator'); setCurrentFood(INITIAL_FOOD_STATE); }} className={`flex flex-col items-center py-2 px-1 flex-1 transition-colors ${activeTab === 'calculator' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                                <PieChart className="text-[20px] mb-1" /><span className="text-[10px] font-bold tracking-tight">Metas</span>
+                            </button>
+                            <button onClick={() => { setActiveTab('add'); setCurrentFood(INITIAL_FOOD_STATE); }} className={`flex flex-col items-center py-2 px-1 flex-1 transition-colors ${activeTab === 'add' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                                <PlusCircle className="text-[20px] mb-1" /><span className="text-[10px] font-bold tracking-tight">Agregar</span>
+                            </button>
+                            <button onClick={() => { setActiveTab('historyTca'); setCurrentFood(INITIAL_FOOD_STATE); }} className={`flex flex-col items-center py-2 px-1 flex-1 transition-colors ${activeTab === 'historyTca' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                                <BookOpen className="text-[20px] mb-1" /><span className="text-[10px] font-bold tracking-tight">TCA 2018</span>
+                            </button>
+                            <button onClick={() => { setActiveTab('historyPersonal'); setCurrentFood(INITIAL_FOOD_STATE); }} className={`flex flex-col items-center py-2 px-1 flex-1 transition-colors ${activeTab === 'historyPersonal' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                                <ClipboardList className="text-[20px] mb-1" /><span className="text-[10px] font-bold tracking-tight">Personal</span>
+                            </button>
+                            <button onClick={() => { setActiveTab('saved'); setCurrentFood(INITIAL_FOOD_STATE); }} className={`flex flex-col items-center py-2 px-1 flex-1 transition-colors ${activeTab === 'saved' ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                                <Bookmark className="text-[20px] mb-1" /><span className="text-[10px] font-bold tracking-tight">Guardados</span>
+                            </button>
+                        </div>
+                    </nav>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
